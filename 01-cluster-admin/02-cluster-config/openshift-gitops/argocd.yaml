@@ -1,0 +1,81 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ArgoCD
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+    argocd.argoproj.io/compare-options: IgnoreExtraneous
+  name: openshift-gitops
+spec:
+  applicationInstanceLabelKey: argocd.argoproj.io/instance
+  server:
+    insecure: true
+    route:
+      enabled: true
+      tls:
+        termination: edge
+        insecureEdgeTerminationPolicy: Redirect
+  sso:
+    dex:
+      openShiftOAuth: true
+    provider: dex
+  resourceCustomizations: |
+    PersistentVolumeClaim:
+      health.lua: |
+        hs = {}
+        if obj.status ~= nil then
+          if obj.status.phase ~= nil then
+            if obj.status.phase == "Pending" then
+              hs.status = "Healthy"
+              hs.message = obj.status.phase
+              return hs
+            end
+            if obj.status.phase == "Bound" then
+              hs.status = "Healthy"
+              hs.message = obj.status.phase
+              return hs
+            end
+          end
+        end
+        hs.status = "Progressing"
+        hs.message = "Waiting for certificate"
+        return hs
+    gpte.opentlc.com/Gitea:
+      health.lua: |
+        hs = {}
+        if obj.status ~= nil then
+          if obj.status.userSetupComplete ~= nil then
+            if obj.status.userSetupComplete == false then
+              hs.status = "Progressing"
+              hs.message = "Gitea is not yet deployed or configured."
+              return hs
+            end
+          end
+          if obj.status.userSetupComplete ~= nil then
+            if obj.status.userSetupComplete == true then
+              hs.status = "Healthy"
+              hs.message = "Gitea has been deployed and configured."
+              return hs
+            end
+          end
+        end
+        hs.status = "Progressing"
+        hs.message = "Waiting for Gitea do deploy."
+        return hs
+  resourceExclusions: |
+    - apiGroups:
+      - tekton.dev
+      clusters:
+      - '*'
+      kinds:
+      - TaskRun
+      - PipelineRun
+    - apiGroups:
+      - compliance.openshift.io
+      kinds:
+      - ComplianceCheckResult
+      - ComplianceRemediation
+  rbac:
+    defaultPolicy: role:admin
+    policy: |
+      g, openshift-gitops-admins, role:admin
+    scopes: "[groups]"
